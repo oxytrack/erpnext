@@ -32,6 +32,7 @@ class TestWarehouse(unittest.TestCase):
 			self.assertEqual(p_warehouse.name, child_warehouse.parent_warehouse)
 			self.assertEqual(child_warehouse.is_group, 0)
 
+<<<<<<< HEAD
 	def test_warehouse_renaming(self):
 		set_perpetual_inventory(1)
 		create_warehouse("Test Warehouse for Renaming 1")
@@ -90,6 +91,40 @@ class TestWarehouse(unittest.TestCase):
 
 		self.assertTrue(frappe.db.get_value("Warehouse",
 			filters={"account": "Test Warehouse for Merging 2 - _TC"}))
+=======
+	def test_unlinking_warehouse_from_item_defaults(self):
+		company = "_Test Company"
+
+		warehouse_names = [f'_Test Warehouse {i} for Unlinking' for i in range(2)]
+		warehouse_ids = []
+		for warehouse in warehouse_names:
+			warehouse_id = create_warehouse(warehouse, company=company)
+			warehouse_ids.append(warehouse_id)
+
+		item_names = [f'_Test Item {i} for Unlinking' for i in range(2)]
+		for item, warehouse in zip(item_names, warehouse_ids):
+			create_item(item, warehouse=warehouse, company=company)
+
+		# Delete warehouses
+		for warehouse in warehouse_ids:
+			frappe.delete_doc("Warehouse", warehouse)
+
+		# Check Item existance
+		for item in item_names:
+			self.assertTrue(
+				bool(frappe.db.exists("Item", item)),
+				f"{item} doesn't exist"
+			)
+
+			item_doc = frappe.get_doc("Item", item)
+			for item_default in item_doc.item_defaults:
+				self.assertNotIn(
+					item_default.default_warehouse,
+					warehouse_ids,
+					f"{item} linked to {item_default.default_warehouse} in {warehouse_ids}."
+				)
+
+>>>>>>> 72dbc3d6b8 (fix!: dont allow renaming warehouse primary key)
 
 def create_warehouse(warehouse_name, properties=None, company=None):
 	if not company:
