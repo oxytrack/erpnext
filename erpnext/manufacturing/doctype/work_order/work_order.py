@@ -31,6 +31,7 @@ from erpnext.stock.doctype.batch.batch import make_batch
 from erpnext.stock.doctype.item.item import get_item_defaults, validate_end_of_life
 from erpnext.stock.doctype.serial_no.serial_no import (
 	auto_make_serial_nos,
+	clean_serial_no_string,
 	get_auto_serial_nos,
 	get_serial_nos,
 )
@@ -65,12 +66,14 @@ class WorkOrder(Document):
 		self.validate_warehouse_belongs_to_company()
 		self.calculate_operating_cost()
 		self.validate_qty()
+		self.validate_transfer_against()
 		self.validate_operation_time()
 		self.status = self.get_status()
 
 		validate_uom_is_integer(self, "stock_uom", ["qty", "produced_qty"])
 
 		self.set_required_items(reset_only_qty = len(self.get("required_items")))
+
 
 	def validate_sales_order(self):
 		if self.sales_order:
@@ -356,6 +359,7 @@ class WorkOrder(Document):
 			frappe.delete_doc("Batch", row.name)
 
 	def make_serial_nos(self, args):
+		self.serial_no = clean_serial_no_string(self.serial_no)
 		serial_no_series = frappe.get_cached_value("Item", self.production_item, "serial_no_series")
 		if serial_no_series:
 			self.serial_no = get_auto_serial_nos(serial_no_series, self.qty)
@@ -505,16 +509,19 @@ class WorkOrder(Document):
 		"""Fetch operations from BOM and set in 'Work Order'"""
 
 		def _get_operations(bom_no, qty=1):
-			return frappe.db.sql(
-					f"""select
-						operation, description, workstation, idx,
-						base_hour_rate as hour_rate, time_in_mins * {qty} as time_in_mins,
-						"Pending" as status, parent as bom, batch_size, sequence_id
-					from
-						`tabBOM Operation`
-					where
-						parent = %s order by idx
-					""", bom_no, as_dict=1)
+			data = frappe.get_all("BOM Operation",
+					filters={"parent": bom_no},
+					fields=["operation", "description", "workstation", "idx",
+						"base_hour_rate as hour_rate", "time_in_mins", "parent as bom",
+						"batch_size", "sequence_id", "fixed_time"],
+					order_by="idx")
+
+			for d in data:
+				if not d.fixed_time:
+					d.time_in_mins = flt(d.time_in_mins) * flt(qty)
+				d.status = "Pending"
+
+			return data
 
 
 		self.set('operations', [])
@@ -542,7 +549,8 @@ class WorkOrder(Document):
 
 	def calculate_time(self):
 		for d in self.get("operations"):
-			d.time_in_mins = flt(d.time_in_mins) * (flt(self.qty) / flt(d.batch_size))
+			if not d.fixed_time:
+				d.time_in_mins = flt(d.time_in_mins) * (flt(self.qty) / flt(d.batch_size))
 
 		self.calculate_operating_cost()
 
@@ -620,6 +628,16 @@ class WorkOrder(Document):
 	def validate_qty(self):
 		if not self.qty > 0:
 			frappe.throw(_("Quantity to Manufacture must be greater than 0."))
+
+	def validate_transfer_against(self):
+		if not self.docstatus == 1:
+			# let user configure operations until they're ready to submit
+			return
+		if not self.operations:
+			self.transfer_material_against = "Work Order"
+		if not self.transfer_material_against:
+			frappe.throw(_("Setting {} is required").format(self.meta.get_label("transfer_material_against")), title=_("Missing value"))
+
 
 	def validate_operation_time(self):
 		for d in self.operations:
